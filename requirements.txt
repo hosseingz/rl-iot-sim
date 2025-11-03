@@ -1,0 +1,4 @@
+stable-baselines3[extra]
+numpy==2.2.6
+pillow==11.3.0
+pygame==2.6.1
