@@ -136,12 +136,23 @@ class SmartClimateControlEnv(gym.Env):
         self.humidity = np.clip(self.humidity, 0.0, 100.0)
 
         # Calculate reward 
-        reward, temp_error, hum_error = self.calculate_reward(total_power, action)
+        reward, temp_error, hum_error,\
+        energy_weight, energy_norm, error_norm = self.calculate_reward(total_power, action)
         
         observation = np.array([self.temperature, self.humidity, self.target_temp, self.target_hum], dtype=np.float32)
         self.time += 1
         terminated = self.time >= self.time_limit
         truncated = False
+        
+        
+        info = {
+            "temp_error": temp_error,
+            "hum_error": hum_error,
+            "energy_weight": energy_weight,
+            "energy_norm": energy_norm,
+            "error_norm": error_norm,
+        }
+        
         
         info = {"power_consumption": total_power, "temp_error": temp_error, "hum_error": hum_error}
 
@@ -152,35 +163,24 @@ class SmartClimateControlEnv(gym.Env):
         temp_error = abs(self.temperature - self.target_temp)
         hum_error = abs(self.humidity - self.target_hum)
 
-        error = temp_error + hum_error
-        norm_error = error / 200.0
+        # normalization
+        energy_norm = total_power / 185.0
+        error_norm = (temp_error + hum_error) / 200.0
+        action_change_norm = np.sum(np.abs(action - self.prev_action))
 
-        # penalty for being away from target (dominant)
-        reward = -norm_error
+        # energy weight increases as error decreases (bounded)
+        energy_weight = 2.0 + 2.0 * (1.0 - error_norm)  # ranges [2,4]
+        # or piecewise if you prefer sharper effect
 
-        # reward if you moved closer (delta)
-        delta = (self.prev_temp_error + self.prev_hum_error) - error
-        norm_delta = delta / 200.0 # maximum error
-        reward += norm_delta * 0.5
+        reward = - energy_weight * energy_norm - 1.0 * error_norm - 0.05 * action_change_norm
 
-
-        # energy cost always hurts
-        # BUT adaptive based on error level
-        norm_total_power = total_power / 185.0 # (150 + 10 + 25)
-        energy_penalty_factor = norm_error + 1
-        reward -= norm_total_power * energy_penalty_factor  
-        
-
-        # smoothness penalty
-        action_change = np.sum(np.abs(action - self.prev_action))
-        reward -= action_change * 0.001
 
         # update prevs
         self.prev_temp_error = temp_error
         self.prev_hum_error = hum_error
         self.prev_action = action.copy()
 
-        return reward, temp_error, hum_error
+        return reward, temp_error, hum_error, energy_weight, energy_norm, error_norm
 
     def render(self):
         print(f"Temp: {self.temperature:.2f}, Humidity: {self.humidity:.2f}")
