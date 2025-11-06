@@ -4,18 +4,33 @@ import numpy as np
 
 
 class SmartClimateControlEnv(gym.Env):
-    def __init__(self, time_limit:int=100, target_temp:float=22.0, target_humidity:float=50.0):
+    def __init__(self, time_limit:int=100, options:dict=None):
         super(SmartClimateControlEnv, self).__init__()
 
         self.time_limit = time_limit
         self.time = 0
+        
+        if options is None:
+            options = {}
+        
         # Targets
-        self.target_temp = target_temp
-        self.target_hum = target_humidity
+        if options.get('random_target', False):
+            self.target_temp = self.np_random.uniform(low=0.0, high=100.0)
+            self.target_hum = self.np_random.uniform(low=0.0, high=100.0)
+        else:
+            if options.get("target_temp") is not None:
+                self.target_temp = options["target_temp"]
+            else:
+                self.target_temp = self.np_random.uniform(low=0.0, high=100.0)
 
+            if options.get("target_humidity") is not None:
+                self.target_hum = options["target_humidity"]
+            else:
+                self.target_hum = self.np_random.uniform(low=0.0, high=100.0)
+        
         # State variables
-        self.temperature = target_temp  # Celsius
-        self.humidity = target_humidity # Percentage
+        self.temperature = self.np_random.uniform(low=self.target_temp - 1, high=self.target_temp + 1)  # Celsius
+        self.humidity = self.np_random.uniform(low=self.target_hum - 3, high=self.target_hum + 3) # Percentage
 
         # Change factors (per unit/second at 100% power)
         # Heater
@@ -46,16 +61,50 @@ class SmartClimateControlEnv(gym.Env):
             dtype=np.float32
         )
 
-    def reset(self, seed=None):
+    def reset(self, seed=None, options:dict=None):
         super().reset(seed=seed)
         self.time = 0
         
+        if options is None:
+            options = {}
+        
+        # Targets
+        if options.get('random_target', False):
+            self.target_temp = self.np_random.uniform(low=0.0, high=100.0)
+            self.target_hum = self.np_random.uniform(low=0.0, high=100.0)
+        else:
+            if options.get("target_temp") is not None:
+                self.target_temp = options["target_temp"]
+            else:
+                self.target_temp = self.np_random.uniform(low=0.0, high=100.0)
+
+            if options.get("target_humidity") is not None:
+                self.target_hum = options["target_humidity"]
+            else:
+                self.target_hum = self.np_random.uniform(low=0.0, high=100.0)
+            
+    
         # Reset to initial state near target
-        self.temperature = self.np_random.uniform(low=self.target_temp - 3, high=self.target_temp + 3)
-        self.humidity = self.np_random.uniform(low=self.target_hum - 5, high=self.target_hum + 5)
+        self.temperature = self.np_random.uniform(low=self.target_temp - 1, high=self.target_temp + 1)
+        self.humidity = self.np_random.uniform(low=self.target_hum - 3, high=self.target_hum + 3)
+        
+        # Clamp values
+        self.target_temp = np.clip(self.target_temp, 0.0, 100.0)
+        self.target_hum = np.clip(self.target_hum, 0.0, 100.0)
+        self.temperature = np.clip(self.temperature, 0.0, 100.0)
+        self.humidity = np.clip(self.humidity, 0.0, 100.0)
+        
+        
+        # Initialize previous errors
+        self.prev_temp_error = abs(self.temperature - self.target_temp)
+        self.prev_hum_error = abs(self.humidity - self.target_hum)
+
+        # Initialize previous action
+        self.prev_action = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+
         observation = np.array([self.temperature, self.humidity, self.target_temp, self.target_hum], dtype=np.float32)
         return observation, {}
-
+        
     def step(self, action):
         # action = [heater_power, humidifier_power, fan_power]
         heater_pwr, humidifier_pwr, fan_pwr = action
@@ -86,13 +135,9 @@ class SmartClimateControlEnv(gym.Env):
         self.temperature = np.clip(self.temperature, 0.0, 100.0)
         self.humidity = np.clip(self.humidity, 0.0, 100.0)
 
-        # Calculate reward (negative cost)
-        # Reward is inverse of distance from target and energy consumption
-        temp_error = abs(self.temperature - self.target_temp)
-        hum_error = abs(self.humidity - self.target_hum)
-        error = temp_error + hum_error
-        reward = ((1 / error + 0.05) - (0.1 * total_power)) # 0.01 energy penalty coefficient
-
+        # Calculate reward 
+        reward, temp_error, hum_error = self.calculate_reward(total_power, action)
+        
         observation = np.array([self.temperature, self.humidity, self.target_temp, self.target_hum], dtype=np.float32)
         self.time += 1
         terminated = self.time >= self.time_limit
@@ -101,6 +146,41 @@ class SmartClimateControlEnv(gym.Env):
         info = {"power_consumption": total_power, "temp_error": temp_error, "hum_error": hum_error}
 
         return observation, reward, terminated, truncated, info
+
+
+    def calculate_reward(self, total_power, action):
+        temp_error = abs(self.temperature - self.target_temp)
+        hum_error = abs(self.humidity - self.target_hum)
+
+        error = temp_error + hum_error
+        norm_error = error / 200.0
+
+        # penalty for being away from target (dominant)
+        reward = -norm_error
+
+        # reward if you moved closer (delta)
+        delta = (self.prev_temp_error + self.prev_hum_error) - error
+        norm_delta = delta / 200.0 # maximum error
+        reward += norm_delta * 0.5
+
+
+        # energy cost always hurts
+        # BUT adaptive based on error level
+        norm_total_power = total_power / 185.0 # (150 + 10 + 25)
+        energy_penalty_factor = norm_error + 1
+        reward -= norm_total_power * energy_penalty_factor  
+        
+
+        # smoothness penalty
+        action_change = np.sum(np.abs(action - self.prev_action))
+        reward -= action_change * 0.001
+
+        # update prevs
+        self.prev_temp_error = temp_error
+        self.prev_hum_error = hum_error
+        self.prev_action = action.copy()
+
+        return reward, temp_error, hum_error
 
     def render(self):
         print(f"Temp: {self.temperature:.2f}, Humidity: {self.humidity:.2f}")
