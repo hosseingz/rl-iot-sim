@@ -11,6 +11,7 @@ class SmartClimateControlEnv(gym.Env):
 
         # Initialize noise settings
         self.DEFAULT_NOISE = {
+            'random_target': {'enabled': False}, 
             'sensor_noise': {'enabled': False, 'std': 0.1},
             'env_disturbance': {'enabled': False, 'std': 0.05},
             'power_fluctuation': {'enabled': False, 'std': 0.05},
@@ -22,22 +23,23 @@ class SmartClimateControlEnv(gym.Env):
         # Initialize for adaptive noise
         self.avg_error = 0.0
         self.error_history = []
-        
+
+
         if options is None:
             options = {}
 
         # Targets
-        if options.get('random_target', False):
+        if self.noise_config.get("random_target", {}).get('enabled', False):
             self.target_temp = self.np_random.uniform(low=0.0, high=100.0)
             self.target_hum = self.np_random.uniform(low=0.0, high=100.0)
         else:
             if options.get("target_temp") is not None:
-                self.target_temp = options["target_temp"]
+                self.target_temp = options.get("target_temp")
             else:
                 self.target_temp = self.np_random.uniform(low=0.0, high=100.0)
 
-            if options.get("target_humidity") is not None:
-                self.target_hum = options["target_humidity"]
+            if options.get("target_hum") is not None:
+                self.target_hum = options.get("target_hum")
             else:
                 self.target_hum = self.np_random.uniform(low=0.0, high=100.0)
 
@@ -92,24 +94,21 @@ class SmartClimateControlEnv(gym.Env):
 
         self.noise_config = self._merge_noise_config(options.get('noise_config') if options else None)
         
+        
         if options is None:
             options = {}
         
         # Targets
-        if options.get('random_target', False):
+        if self.noise_config.get("random_target", {}).get('enabled', False):
             self.target_temp = self.np_random.uniform(low=0.0, high=100.0)
             self.target_hum = self.np_random.uniform(low=0.0, high=100.0)
         else:
             if options.get("target_temp") is not None:
-                self.target_temp = options["target_temp"]
-            else:
-                self.target_temp = self.np_random.uniform(low=0.0, high=100.0)
+                self.target_temp = options.get("target_temp")
 
-            if options.get("target_humidity") is not None:
-                self.target_hum = options["target_humidity"]
-            else:
-                self.target_hum = self.np_random.uniform(low=0.0, high=100.0)
-    
+            if options.get("target_hum") is not None:
+                self.target_hum = options.get("target_hum")
+                
         # Reset to initial state near target
         self.temperature = self.np_random.uniform(low=self.target_temp - 1, high=self.target_temp + 1)
         self.humidity = self.np_random.uniform(low=self.target_hum - 3, high=self.target_hum + 3)
@@ -197,8 +196,8 @@ class SmartClimateControlEnv(gym.Env):
         terminated = self.time >= self.time_limit
         observation = np.array([obs_temp, obs_hum, self.target_temp, self.target_hum], dtype=np.float32)
         
-        
         info = {
+            "avg_error": self.avg_error,
             "temp_error": temp_error,
             "hum_error": hum_error,
             "energy_weight": energy_weight,
@@ -206,7 +205,6 @@ class SmartClimateControlEnv(gym.Env):
             "error_norm": error_norm,
         }
         
-
         return observation, reward, terminated, truncated, info
 
     def calculate_reward(self, total_power, action):
@@ -237,7 +235,6 @@ class SmartClimateControlEnv(gym.Env):
         self.prev_action = action.copy()
 
         return reward, temp_error, hum_error, energy_weight, energy_norm, error_norm
-
 
     def _merge_noise_config(self, user_cfg):
         cfg = {}
