@@ -4,6 +4,7 @@ import numpy as np
 class SmartClimateControlEnv(gym.Env):
     def __init__(self, time_limit:int=100, options:dict=None, rate_scale_range=(1.0, 1.0)):
         super(SmartClimateControlEnv, self).__init__()
+        self.np_random = np.random.default_rng() 
 
         self.rate_scale_range = rate_scale_range
         self.time_limit = time_limit
@@ -27,6 +28,12 @@ class SmartClimateControlEnv(gym.Env):
 
         if options is None:
             options = {}
+
+        # scale coefficients
+        self.alpha = options.get('alpha', 12)   # weight on error
+        self.beta = options.get('beta', 1)      # weight on energy
+        self.gamma = options.get('gamma', 0.05) # weight on action change
+        
 
         # Targets
         if self.noise_config.get("random_target", {}).get('enabled', False):
@@ -88,9 +95,12 @@ class SmartClimateControlEnv(gym.Env):
 
     def reset(self, seed=None, options:dict=None):
         super().reset(seed=seed)
-
+        
         self.apply_rate_scale()
         self.time = 0
+        
+        self.avg_error = 0.0
+        self.error_history = []
 
         self.noise_config = self._merge_noise_config(options.get('noise_config') if options else None)
         
@@ -198,6 +208,7 @@ class SmartClimateControlEnv(gym.Env):
         
         info = {
             "avg_error": self.avg_error,
+            "total_power": total_power,
             "temp_error": temp_error,
             "hum_error": hum_error,
             "energy_weight": energy_weight,
@@ -222,13 +233,17 @@ class SmartClimateControlEnv(gym.Env):
         # normalization
         energy_norm = total_power / 185.0
         error_norm = (temp_error + hum_error) / 200.0
-        action_change_norm = np.sum(np.abs(action - self.prev_action))
+        action_change_norm = np.sum(np.abs(action - self.prev_action)) / 3
+        action_change_norm = np.clip(action_change_norm, 0.0, 1.0)
 
         # energy weight increases as error decreases (bounded)
-        energy_weight = 2.0 + 2.0 * (1.0 - error_norm)  # ranges [2,4]
+        energy_weight = 1 + 2.0 * (1.0 - error_norm)  # ranges [1, 3]
         # or piecewise if you prefer sharper effect
 
-        reward = - energy_weight * energy_norm - 1.0 * error_norm - 0.05 * action_change_norm
+        reward = - (self.alpha * error_norm + 
+                    self.beta * energy_weight * energy_norm +
+                    self.gamma * action_change_norm
+                )
 
         self.prev_temp_error = temp_error
         self.prev_hum_error = hum_error
