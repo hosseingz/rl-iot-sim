@@ -9,7 +9,7 @@ RANKING_CSV = os.path.join(SWEEP_DIR, 'ranking.csv')
 
 df = pd.read_csv(MEAN_SCALAR_CSV)
 
-df['err'] = df['avg_error_mean'] / 200.0
+df['err'] = df['error_mean'] / 200.0
 df['eng'] = df['energy_norm_mean']
 
 df['score'] = 0.6 * df['err'] + 0.4 * df['eng']

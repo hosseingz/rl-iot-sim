@@ -32,7 +32,6 @@ class SmartClimateControlEnv(gym.Env):
         # scale coefficients
         self.alpha = options.get('alpha', 12)   # weight on error
         self.beta = options.get('beta', 1)      # weight on energy
-        self.gamma = options.get('gamma', 0.05) # weight on action change
         
 
         # Targets
@@ -128,11 +127,6 @@ class SmartClimateControlEnv(gym.Env):
         self.target_hum = np.clip(self.target_hum, 0.0, 100.0)
         self.temperature = np.clip(self.temperature, 0.0, 100.0)
         self.humidity = np.clip(self.humidity, 0.0, 100.0)
-        
-        # Initialize previous errors
-        self.prev_temp_error = abs(self.temperature - self.target_temp)
-        self.prev_hum_error = abs(self.humidity - self.target_hum)
-        self.prev_action = np.array([0.0, 0.0, 0.0], dtype=np.float32)
 
         observation = np.array([self.temperature, self.humidity, self.target_temp, self.target_hum], dtype=np.float32)
         return observation, {}
@@ -185,7 +179,7 @@ class SmartClimateControlEnv(gym.Env):
         self.temperature = np.clip(self.temperature, 0.0, 100.0)
         self.humidity = np.clip(self.humidity, 0.0, 100.0)
 
-        reward, temp_error, hum_error, energy_weight, energy_norm, error_norm = self.calculate_reward(total_power, action)
+        reward, temp_error, hum_error, energy_norm, error = self.calculate_reward(total_power, action)
 
         # Add sensor noise to observation (with adaptive noise)
         obs_temp = self.temperature
@@ -207,13 +201,10 @@ class SmartClimateControlEnv(gym.Env):
         observation = np.array([obs_temp, obs_hum, self.target_temp, self.target_hum], dtype=np.float32)
         
         info = {
-            "avg_error": self.avg_error,
-            "total_power": total_power,
             "temp_error": temp_error,
             "hum_error": hum_error,
-            "energy_weight": energy_weight,
             "energy_norm": energy_norm,
-            "error_norm": error_norm,
+            "error": error,
         }
         
         return observation, reward, terminated, truncated, info
@@ -230,26 +221,20 @@ class SmartClimateControlEnv(gym.Env):
         if len(self.error_history) > 0:
             self.avg_error = np.mean(self.error_history)
         
-        # normalization
-        energy_norm = total_power / 185.0
-        error_norm = (temp_error + hum_error) / 200.0
-        action_change_norm = np.sum(np.abs(action - self.prev_action)) / 3
-        action_change_norm = np.clip(action_change_norm, 0.0, 1.0)
+        
+        energy_norm = total_power / 185.0  # normalization (150 + 10 + 25)
+        error = temp_error + hum_error
 
-        # energy weight increases as error decreases (bounded)
-        energy_weight = 1 + 2.0 * (1.0 - error_norm)  # ranges [1, 3]
-        # or piecewise if you prefer sharper effect
+        reward_error = 1.0 / (1.0 + error)
+        reward = - self.alpha * (1.0 - reward_error)
 
-        reward = - (self.alpha * error_norm + 
-                    self.beta * energy_weight * energy_norm +
-                    self.gamma * action_change_norm
-                )
+        if error < 0.5:
+            reward += 0.2 / (self.beta * energy_norm + 0.01)
+        else:
+            reward += 0.05 / (self.beta * energy_norm + 0.01) 
+        
 
-        self.prev_temp_error = temp_error
-        self.prev_hum_error = hum_error
-        self.prev_action = action.copy()
-
-        return reward, temp_error, hum_error, energy_weight, energy_norm, error_norm
+        return reward, temp_error, hum_error, energy_norm, error
 
     def _merge_noise_config(self, user_cfg):
         cfg = {}

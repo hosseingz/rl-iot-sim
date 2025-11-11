@@ -30,21 +30,16 @@ SAVE_FREQ = 20_000
 
 
 # Sweep hyperparameters
-alpha_list = [8.0, 12.0, 16]
-beta_list  = [0.5, 1.0, 2]
-gamma_list = [0.02, 0.05]
-
-hyper_combinations = list(itertools.product(alpha_list, beta_list, gamma_list))
+alpha_list = [6, 8, 10]
+beta_list  = [3, 4, 6]
 
 
-info_keywords=(
-    'avg_error', 'temp_error',
-    'hum_error', 'energy_weight',
-    'energy_norm', 'error_norm'
-)
+hyper_combinations = list(itertools.product(alpha_list, beta_list))
+
+info_keywords = ('energy_norm', 'error')
 
 
-def env_wrapper(alpha, beta, gamma):
+def env_wrapper(alpha, beta):
     def make_env():
         env = SmartClimateControlEnv(
             time_limit=300,
@@ -55,7 +50,6 @@ def env_wrapper(alpha, beta, gamma):
                 
                 "alpha": alpha,
                 "beta": beta,
-                "gamma": gamma   
             },
             rate_scale_range=(1, 1)
         )
@@ -91,26 +85,20 @@ class LoggerCallback(BaseCallback):
         
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
-        for info in infos:
-            if "avg_error" in info:
-                self.logger.record("metrics/avg_error", info["avg_error"])
-        
-            if "total_power" in info:
-                self.logger.record("metrics/total_power", info["total_power"])
-                
+        for info in infos:     
             if "energy_norm" in info:
                 self.logger.record("metrics/energy_norm", info["energy_norm"])
                 
-            if "error_norm" in info:
-                self.logger.record("metrics/error_norm", info["error_norm"])
+            if "error" in info:
+                self.logger.record("metrics/error", info["error"])
         
         return True
                 
                 
 
 # Run sweep
-for idx, (alpha, beta, gamma) in enumerate(hyper_combinations, start=1):
-    run_name = f"run_a{alpha}_b{beta}_g{gamma}"
+for idx, (alpha, beta) in enumerate(hyper_combinations, start=1):
+    run_name = f"run_a{alpha}_b{beta}"
     
     run_dir = os.path.join(SWEEP_DIR, 'runs', run_name)
     model_dir = os.path.join(run_dir, 'models')
@@ -119,11 +107,11 @@ for idx, (alpha, beta, gamma) in enumerate(hyper_combinations, start=1):
         os.makedirs(path, exist_ok=True)
 
     print(f"=== Running sweep {idx}/{len(hyper_combinations)}: {run_name} ===")
-    print(f"Hyperparameters: alpha={alpha}, beta={beta}, gamma={gamma}")
+    print(f"Hyperparameters: alpha={alpha}, beta={beta}")
 
 
     # Create parallel envs
-    make_env = env_wrapper(alpha, beta, gamma)
+    make_env = env_wrapper(alpha, beta)
     env = SubprocVecEnv([make_env for _ in range(NUM_ENVS)])
 
     try:
@@ -139,7 +127,7 @@ for idx, (alpha, beta, gamma) in enumerate(hyper_combinations, start=1):
 
         params_logger_callback = LoggerCallback(
             save_dir=run_dir,
-            params={'alpha': alpha, 'beta': beta, 'gamma': gamma},
+            params={'alpha': alpha, 'beta': beta},
             verbose=1
         )
 
@@ -148,7 +136,7 @@ for idx, (alpha, beta, gamma) in enumerate(hyper_combinations, start=1):
             total_timesteps=TOTAL_TIMESTEPS,
             reset_num_timesteps=False,
             callback=[checkpoint_callback, params_logger_callback],
-            tb_log_name=f"a{alpha}_b{beta}_g{gamma}"
+            tb_log_name=f"a{alpha}_b{beta}"
         )
 
         # Save final model

@@ -40,7 +40,7 @@ df_mean_scalar = []
 
 def eval_model(model_path):
     model_name = model_path.split(os.sep)[-3]  # runs/<run_name>/models/model.zip  => model_name = run_name
-    match = re.match(r"run_a([0-9.]+)_b([0-9.]+)_g([0-9.]+)", model_name)
+    match = re.match(r"run_a([0-9.]+)_b([0-9.]+)", model_name)
 
     tb_writer = SummaryWriter(os.path.join(TB_DIR, model_name))
 
@@ -58,12 +58,11 @@ def eval_model(model_path):
                 
                 "alpha": float(match.group(1)),
                 "beta": float(match.group(2)),
-                "gamma": float(match.group(3)),
         })
 
         model = SAC.load(model_path, env=env, verbos=0)
 
-        avg_error_all = np.zeros((EPISODES, EP_LEN))
+        error_all = np.zeros((EPISODES, EP_LEN))
         energy_norm_all = np.zeros((EPISODES, EP_LEN))
 
 
@@ -74,25 +73,25 @@ def eval_model(model_path):
                 action,_ = model.predict(obs, deterministic=True)
                 obs, _, term, trunc, info = env.step(action)
 
-                avg_error_all[ep, t] = info.get("avg_error", 0.0)
+                error_all[ep, t] = info.get("error", 0.0)
                 energy_norm_all[ep, t] = info.get("energy_norm", 0.0)
 
                 if term or trunc:
                     break
 
-        mean_avg_error = avg_error_all.mean(axis=0)
+        mean_error = error_all.mean(axis=0)
         mean_energy_norm = energy_norm_all.mean(axis=0)
         
         for step in range(EP_LEN):
-            tb_writer.add_scalar(f"avg_error", mean_avg_error[step], step)
+            tb_writer.add_scalar(f"error", mean_error[step], step)
             tb_writer.add_scalar(f"energy_norm", mean_energy_norm[step], step)
 
         for t in range(EP_LEN):
             df_mean_episode.append({
                 "model": model_name,
-                "metric": "avg_error",
+                "metric": "error",
                 "step": t,
-                "value": mean_avg_error[t]
+                "value": mean_error[t]
             })
             df_mean_episode.append({
                 "model": model_name,
@@ -103,7 +102,7 @@ def eval_model(model_path):
         
         df_mean_scalar.append({
             "model": model_name,
-            "avg_error_mean": mean_avg_error.mean(),
+            "error_mean": mean_error.mean(),
             "energy_norm_mean": mean_energy_norm.mean()
         })
         
