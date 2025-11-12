@@ -1,4 +1,4 @@
-from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
+from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3 import SAC
 import torch as th
@@ -8,6 +8,7 @@ import os
 
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from callbacks import PerformanceThresholdCallback, LoggerCallback
 from env import SmartClimateControlEnv
 
 
@@ -81,19 +82,7 @@ def make_model(phase, env):
         print('Invalid phase')
 
 
-class LoggerCallback(BaseCallback):
-        
-    def _on_step(self) -> bool:
-        infos = self.locals.get("infos", [])
-        for info in infos:     
-            if "energy_norm" in info:
-                self.logger.record("metrics/energy_norm", info["energy_norm"])
-                
-            if "error" in info:
-                self.logger.record("metrics/error", info["error"])
-        
-        return True
-                
+
                 
 
 # Run sweep
@@ -117,25 +106,36 @@ for idx, (alpha, beta) in enumerate(hyper_combinations, start=1):
     try:
         model = make_model(phase=1, env=env,)
 
-        # callback
+        # callbacks
         checkpoint_callback = CheckpointCallback(
             save_freq=SAVE_FREQ,
             save_path=model_dir,
             verbose=2,
-            name_prefix=f'hps-{run_name}'
+            name_prefix=f'hps_{run_name}'
         )
 
         params_logger_callback = LoggerCallback(
             save_dir=run_dir,
-            params={'alpha': alpha, 'beta': beta},
             verbose=1
         )
+
+        performanceTh_callback = PerformanceThresholdCallback(
+            metric_weights={"error": 0.8, "energy_norm": 0.2},
+            thresholds={"error": 0.5, "energy_norm": 0.7},
+            patience=30_000,
+            fail_patience=60_000,
+            warmup_steps=1500,
+            success_streak=100,
+            adaptive=True,
+            verbose=1
+        )
+
 
         # Training
         model.learn(
             total_timesteps=TOTAL_TIMESTEPS,
             reset_num_timesteps=False,
-            callback=[checkpoint_callback, params_logger_callback],
+            callback=[checkpoint_callback, params_logger_callback, performanceTh_callback],
             tb_log_name=f"a{alpha}_b{beta}"
         )
 
