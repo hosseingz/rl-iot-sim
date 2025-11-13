@@ -114,14 +114,11 @@ for idx, (alpha, beta) in enumerate(hyper_combinations, start=1):
             name_prefix=f'hps_{run_name}'
         )
 
-        params_logger_callback = LoggerCallback(
-            save_dir=run_dir,
-            verbose=1
-        )
+        params_logger_callback = LoggerCallback()
 
         performanceTh_callback = PerformanceThresholdCallback(
             metric_weights={"error": 0.8, "energy_norm": 0.2},
-            thresholds={"error": 0.5, "energy_norm": 0.7},
+            thresholds={"error": 0.5, "energy_norm": 0.1},
             patience=30_000,
             fail_patience=60_000,
             warmup_steps=1500,

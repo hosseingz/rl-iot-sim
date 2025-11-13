@@ -15,6 +15,7 @@ import sys
 import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from callbacks import PerformanceThresholdCallback, LoggerCallback
 from env import SmartClimateControlEnv
 
 
@@ -40,21 +41,23 @@ noise_cfg = {
 env = SmartClimateControlEnv(
     time_limit=300,
     options={
-        "noise_config": noise_cfg
+        "noise_config": noise_cfg,
+        
+        # Optimized hyperparameters obtained through hyperparameter sweep.
+        # Further testing may yield improved values for alpha and beta.
+        "alpha": 6,
+        "beta": 3,
     },
     rate_scale_range=(0.7, 1.3)
 )
 
 # Wrap with Monitor for logging
 info_keywords=(
-    'avg_error', 'temp_error',
-    'hum_error', 'energy_weight',
-    'energy_norm', 'error_norm'
+    'temp_error','hum_error',
+    'error','energy_norm'
 )
 env = Monitor(env, LOG_DIR, info_keywords=info_keywords)
 
-
-# Try loading previous phase2 model
 
 
 policy_kwargs = dict(
@@ -65,26 +68,53 @@ policy_kwargs = dict(
     )
 )
 
+# Load pre-trained model for continuation; exit if not found
 if os.path.exists(PREV_MODEL + ".zip") or os.path.exists(PREV_MODEL):
     try:
-        model = SAC.load(PREV_MODEL, env=env, verbose=1, policy_kwargs=policy_kwargs,)
+        model = SAC.load(PREV_MODEL, env=env, verbose=1, policy_kwargs=policy_kwargs)
         print(f"Loaded model from {PREV_MODEL}")
     except Exception as e:
-        print(f"Failed to load previous model ({PREV_MODEL}): {e}\nTraining from scratch.")
-        model = SAC("MlpPolicy", env, verbose=1, policy_kwargs=policy_kwargs, tensorboard_log=LOG_DIR)
-    else:
-        model = SAC("MlpPolicy", env, verbose=1, policy_kwargs=policy_kwargs, tensorboard_log=LOG_DIR)
+        print(f"Failed to load previous model ({PREV_MODEL}): {e}")
+        print("Exiting execution.")
+        exit(1)
+else:
+    print(f"Previous model ({PREV_MODEL}) not found.")
+    print("Exiting execution.")
+    exit(1)
 
-# Save periodic checkpoints (optional)
-callback = CheckpointCallback(
+
+# Callbacks
+checkpoint_callback = CheckpointCallback(
     save_freq=10_000, save_path=os.path.dirname(MODEL_PATH),
     name_prefix='sac_phase3'
 )
 
+params_logger_callback = LoggerCallback()
+
+performanceTh_callback = PerformanceThresholdCallback(
+    metric_weights={"error": 0.8, "energy_norm": 0.2},
+    thresholds={"error": 0.5, "energy_norm": 0.1},
+    patience=30_000,
+    fail_patience=60_000,
+    warmup_steps=1500,
+    success_streak=1000,
+    adaptive=True,
+    verbose=1
+)
+
+
 # Learn
-TIMESTEPS = 300_000
-model.learn(total_timesteps=TIMESTEPS, callback=callback)
+TIMESTEPS = 3_000_000
+model.learn(
+    total_timesteps=TIMESTEPS,
+    callback=[
+        checkpoint_callback,
+        params_logger_callback,
+        performanceTh_callback
+    ]
+)
 
 # Final save
-model.save(MODEL_PATH)
-print(f"Saved model to {MODEL_PATH}")
+final_save_path = os.path.join(MODEL_PATH, 'final_save.zip')
+model.save(final_save_path)
+print(f"Saved model to {final_save_path}")

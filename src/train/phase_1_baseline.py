@@ -15,6 +15,7 @@ import sys
 import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from callbacks import PerformanceThresholdCallback, LoggerCallback
 from env import SmartClimateControlEnv
 
 
@@ -33,7 +34,12 @@ env = SmartClimateControlEnv(
     options={
         "noise_config": None,
         "target_temp": 22.0,
-        "target_hum": 50.0
+        "target_hum": 50.0,
+        
+        # Optimized hyperparameters obtained through hyperparameter sweep.
+        # Further testing may yield improved values for alpha and beta.
+        "alpha": 6,
+        "beta": 3,
     },
     rate_scale_range=(1, 1)
 )
@@ -41,9 +47,8 @@ env = SmartClimateControlEnv(
 
 # Wrap with Monitor for logging
 info_keywords=(
-    'avg_error', 'temp_error',
-    'hum_error', 'energy_weight',
-    'energy_norm', 'error_norm'
+    'temp_error','hum_error',
+    'error','energy_norm'
 )
 
 env = Monitor(env, LOG_DIR, info_keywords=info_keywords)
@@ -61,17 +66,39 @@ policy_kwargs = dict(
 model = SAC("MlpPolicy", env, verbose=1, policy_kwargs=policy_kwargs, tensorboard_log=LOG_DIR)
 
 
-# Save periodic checkpoints (optional)
-callback = CheckpointCallback(
+# Callbacks
+checkpoint_callback = CheckpointCallback(
     save_freq=10_000, save_path=os.path.dirname(MODEL_PATH),
     name_prefix='sac_phase1'
 )
 
+params_logger_callback = LoggerCallback()
+
+performanceTh_callback = PerformanceThresholdCallback(
+    metric_weights={"error": 0.8, "energy_norm": 0.2},
+    thresholds={"error": 0.5, "energy_norm": 0.1},
+    patience=30_000,
+    fail_patience=60_000,
+    warmup_steps=1500,
+    success_streak=1000,
+    adaptive=True,
+    verbose=1
+)
+
+
 # Learn
-TIMESTEPS = 300_000
-model.learn(total_timesteps=TIMESTEPS, callback=callback)
+TIMESTEPS = 3_000_000
+model.learn(
+    total_timesteps=TIMESTEPS,
+    callback=[
+        checkpoint_callback,
+        params_logger_callback,
+        performanceTh_callback
+    ]
+)
 
 
 # Final save
-model.save(MODEL_PATH)
-print(f"Saved model to {MODEL_PATH}")
+final_save_path = os.path.join(MODEL_PATH, 'final_save.zip')
+model.save(final_save_path)
+print(f"Saved model to {final_save_path}")
